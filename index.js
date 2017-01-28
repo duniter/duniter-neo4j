@@ -9,7 +9,7 @@ const duniter = require('duniter');
  ***************************************/
 
 // Default Duniter node's database
-const HOME_DUNITER_DATA_FOLDER = 'duniter_wotcher';
+const HOME_DUNITER_DATA_FOLDER = 'duniter_neo4j';
 
 // host on which UI is available
 const SERVER_HOST = 'localhost';
@@ -22,13 +22,13 @@ const SERVER_PORT = 10500;
  ***************************************/
 
 const stack = duniter.statics.autoStack([{
-  name: 'wotcher',
+  name: 'neo4j',
   required: {
 
     duniter: {
 
       cli: [{
-        name: 'wotcher [host] [port]',
+        name: 'neo4j [host] [port]',
         desc: 'Starts watching wot',
 
         // Disables Duniter node's logs
