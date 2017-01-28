@@ -87,10 +87,12 @@ ORDER BY count(p) DESC`,
         try {
             that.db = neo4j.driver("bolt://" + neo4jHost,
                 neo4j.auth.basic('neo4j', 'duniter'));
+
             ws.connect("http://" + duniterServer.conf.ipv4 + ":" + duniterServer.conf.port + "/ws/block",
-                co(function* () {
-                    yield that.refreshWoT();
-                }));
+                () => co(function* () {
+                        yield that.refreshWoT();
+                    })
+            );
             that.db.onError = (error) => {
                 console.log(error);
             };
