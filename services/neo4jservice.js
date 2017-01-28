@@ -2,6 +2,7 @@
 
 const Q = require('q');
 const co = require('co');
+const es = require('event-stream');
 const duniter = require('duniter');
 const neo4j = require('neo4j-driver').v1;
 const ws = require('ws');
@@ -45,8 +46,8 @@ ORDER BY count(p) DESC`,
     });
 
     this.refreshWoT = () => co(function*() {
+        const session = that.db.session();
         try {
-            const session = that.db.session();
             console.log("Select identities");
             yield session.run("MATCH (n) DETACH\nDELETE n");
             console.log("Select identities");
@@ -88,14 +89,22 @@ ORDER BY count(p) DESC`,
             that.db = neo4j.driver("bolt://" + neo4jHost,
                 neo4j.auth.basic(duniterServer.conf.neo4j.user, duniterServer.conf.neo4j.password));
 
-            ws.connect("http://" + duniterServer.conf.ipv4 + ":" + duniterServer.conf.port + "/ws/block",
-                () => co(function* () {
-                        yield that.refreshWoT();
-                    })
-            );
+            yield that.refreshWoT();
             that.db.onError = (error) => {
                 console.log(error);
             };
+            duniterServer
+                .pipe(es.mapSync((data) => co(function*(){
+                    try {
+                        // Broadcast block
+                        if (data.joiners) {
+                            yield that.refreshWoT();
+                        }
+                    } catch (e) {
+                        console.log(e);
+                    }
+                }))
+                );
 
         } catch (e) {
             console.log(e);
