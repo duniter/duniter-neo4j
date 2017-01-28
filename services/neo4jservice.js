@@ -86,7 +86,7 @@ ORDER BY count(p) DESC`,
     this.init = () => co(function*() {
         try {
             that.db = neo4j.driver("bolt://" + neo4jHost,
-                neo4j.auth.basic('neo4j', 'duniter'));
+                neo4j.auth.basic(duniterServer.conf.neo4j.user, duniterServer.conf.neo4j.password));
 
             ws.connect("http://" + duniterServer.conf.ipv4 + ":" + duniterServer.conf.port + "/ws/block",
                 () => co(function* () {
