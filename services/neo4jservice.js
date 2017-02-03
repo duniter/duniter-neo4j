@@ -74,20 +74,29 @@ ORDER BY count(p) DESC`,
     this.refreshWoT = () => co(function*() {
         const session = that.db.session();
         try {
-            console.log("Select identities");
             yield session.run("MATCH (n) DETACH\nDELETE n");
             console.log("Select identities");
             const identities = yield duniterServer.dal.idtyDAL.query('SELECT `pub`, `uid`,`member`,`created_on`,`written_on` FROM i_index;');
             console.log(identities);
+
+	    // Get members count
+	    const head = yield duniterServer.dal.getCurrentBlockOrNull();
+	    const membersCount = head ? head.membersCount : 0;
+
+	    // Calculate cert number required to become sentri
+	    let dSen;
+	    dSen = Math.ceil(Math.pow(membersCount, 1 / duniterServer.conf.stepMax));
+
             for(const idty in identities) {
                 yield session.run({
-                    text: "CREATE (n:Idty { pubkey: {pubkey}, uid: {uid}, member: {member}, created_on: {created_on}, written_on: {written_on} })",
+                    text: "CREATE (n:Idty { pubkey: {pubkey}, uid: {uid}, member: {member}, created_on: {created_on}, written_on: {written_on}, sentry: {sentry} })",
                     parameters: {
                         pubkey: identities[idty].pub,
                         uid: identities[idty].uid,
                         member: identities[idty].member,
 			created_on: identities[idty].created_on.split("-",1),
-			written_on: identities[idty].written_on.split("-",1)
+			written_on: identities[idty].written_on.split("-",1),
+			sentry: "0"
                     }
                 });
            }
@@ -105,6 +114,18 @@ ORDER BY count(p) DESC`,
                 });
             }
             console.log("Done");
+
+            yield session.run({
+                text: "MATCH (sentry) --> (member)\n\
+			WITH sentry, count(member) as count_member\n\
+			WHERE count_member >= {dSen}\n\
+			SET sentry.sentry = 1",
+                    parameters: {
+                        dSen: dSen
+                 }
+             });
+
+
         } catch (e) {
             console.log(e);
         } finally {
