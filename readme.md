@@ -9,7 +9,7 @@ https://yarnpkg.com/docs/install/
 ## Installation
 
 
-    git clone https://github.com/Insoleet/duniter-neo4j.git
+    git clone https://github.com/duniter/duniter-neo4j.git
     cd duniter-neo4j
     yarn
     node index.js config --autoconf
