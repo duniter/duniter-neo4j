@@ -45,23 +45,39 @@ ORDER BY count(p) DESC`,
         return []
     });
 
-    this.getMyParameters = (uid) => co(function*() {
+    this.getSentriesPaths = (uid) => co(function*() {
         const session = that.db.session();
         try {
-           const result = yield session.run({text:`MATCH (n { uid:{uid}} ) RETURN n.uid, n.created_on` ,
+           //const result = yield session.run({text:`MATCH (n { uid:{uid}} ) RETURN n.uid, n.created_on` ,
+           //    parameters: {uid: uid}});
+
+	   const result = yield session.run({text:
+			"MATCH p=allShortestPaths((n {uid : {uid}}) -[*]-> (sentry {sentry : 1}))\n\
+			RETURN sentry.uid,count(p),length(p),collect([ x in nodes(p)[1..-1] | x.uid])\n\
+			ORDER BY count(p) DESC",
                parameters: {uid: uid}});
-            //var myParameters = {};
+
+		// MATCH p=allShortestPaths((n {uid : "inso"}) -[*]-> (sentry {sentry : 1}))
+		// RETURN sentry.uid,count(p),length(p),collect([ x in nodes(p)[1..-1] | x.uid])
+		// ORDER BY length(p) DESC
+
+
+	    const sentriesPaths = [];
             for(const r of result.records) {
-                //const certifiers = [];
-                //for (const cert of r._fields[2]) {
-                //    certifiers.add(cert[0]);
-                //}
-                var myParameters = {
-                    'uid': r._fields[0],
-		    'created_on': r._fields[1][0]
-                };
+
+                const paths = [];
+                for (const path of r._fields[3]) {
+                    paths.add(path[0]);
+                }
+		
+                sentriesPaths.add({
+                    'sentry': r._fields[0],
+		    'count': r._fields[1].getLowBits(),
+                    'length': r._fields[2].getLowBits(),
+		    'paths': r._fields[3]
+                })
             }
-            return myParameters;
+            return sentriesPaths;
         } catch (e) {
             console.log(e);
         } finally {
@@ -83,7 +99,7 @@ ORDER BY count(p) DESC`,
 	    const head = yield duniterServer.dal.getCurrentBlockOrNull();
 	    const membersCount = head ? head.membersCount : 0;
 
-	    // Calculate cert number required to become sentri
+	    // Calculate cert number required to become sentry
 	    let dSen;
 	    dSen = Math.ceil(Math.pow(membersCount, 1 / duniterServer.conf.stepMax));
 
@@ -104,7 +120,7 @@ ORDER BY count(p) DESC`,
             console.log(certs);
             for(const c in certs) {
                 yield session.run({text:"MATCH (u:Idty { pubkey:{issuer} }), (r:Idty { pubkey:{receiver} })\n\
-    CREATE (u)-[c:CERTIFY { created_on: {created_on}, written_on: {written_on} } ]->(r)",
+    				CREATE (u)-[c:CERTIFY { created_on: {created_on}, written_on: {written_on} } ]->(r)",
                         parameters:{
                             issuer: certs[c].issuer,
                             receiver: certs[c].receiver,
@@ -115,16 +131,27 @@ ORDER BY count(p) DESC`,
             }
             console.log("Done");
 
+	    // Mark sentries in Neo4j database
+	    // MATCH (i) --> (sentry)
+	    // WITH sentry, count(i) as count_i
+	    // WHERE count_i > 3
+	    // MATCH (sentry) --> (r)
+	    // WITH sentry, count(r) as count_r, count_i
+	    // WHERE count_r > 3
+	    // RETURN sentry.uid, count_r, count_i
+
             yield session.run({
-                text: "MATCH (sentry) --> (member)\n\
-			WITH sentry, count(member) as count_member\n\
-			WHERE count_member >= {dSen}\n\
+                text: "MATCH (i) --> (sentry)\n\
+			WITH sentry, count(i) as count_i\n\
+			WHERE count_i >= {dSen}\n\
+			MATCH (sentry) --> (r)\n\
+			WITH sentry, count(r) as count_r, count_i\n\
+			WHERE count_r >= {dSen}\n\
 			SET sentry.sentry = 1",
                     parameters: {
                         dSen: dSen
                  }
              });
-
 
         } catch (e) {
             console.log(e);
