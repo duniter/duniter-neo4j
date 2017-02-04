@@ -19,7 +19,7 @@ https://yarnpkg.com/docs/install/
 
         "neo4j": {
 	 "user": "neo4j",
-	  "password": "98spqjpy"
+	  "password": "password"
 	}
 
 
