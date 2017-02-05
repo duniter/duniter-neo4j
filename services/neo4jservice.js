@@ -80,6 +80,44 @@ ORDER BY count(p) DESC`,
         return []
     });
 
+
+    // API to know mean path length to sentries
+    this.getSentriesPathsLengthsMean = (uid) => co(function*() {
+    const session = that.db.session();
+    try {
+            // Calculte number of reachable sentries for each step
+            const result = yield session.run({text:
+                "WITH  {uid} as uid\n\
+                MATCH (n {sentry : 1} )\n\
+                WHERE NOT n.uid = uid\n\
+                WITH count(n) as count_n, uid\n\
+                MATCH p=ShortestPath((member {uid:uid}) <-[*]-(r_sentry {sentry : 1}))\n\
+                RETURN uid, 1.0 * SUM(length(p)) / count(p)",
+            parameters: {
+                uid: uid
+            }});
+
+            const sentriesPathsLengthsMean = [];
+
+            for(const r of result.records) {
+        
+                //console.log(r._fields);
+                sentriesPathsLengthsMean.add({
+                'uid': r._fields[0],
+                'mean': r._fields[1]
+                 })
+            }
+            return sentriesPathsLengthsMean;
+
+        } catch (e) {
+            console.log(e);
+        } finally {
+            // Completed!
+            session.close();
+        }
+        return []
+    });
+
     // API for percent of reachable sentries
 
     this.getSentriesPathsLengths = (uid) => co(function*() {
