@@ -50,7 +50,7 @@ ORDER BY count(p) DESC`,
         try {
 
 	   const result = yield session.run({text:
-			"MATCH p=allShortestPaths((n {uid : {uid}}) -[*]-> (sentry {sentry : 1}))\n\
+			"MATCH p=allShortestPaths((n {uid : {uid}}) <-[*]- (sentry {sentry : 1}))\n\
 			RETURN sentry.uid,count(p),length(p),collect([ x in nodes(p)[1..-1] | x.uid])\n\
 			ORDER BY count(p) DESC",
                parameters: {uid: uid}});
