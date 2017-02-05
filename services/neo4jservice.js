@@ -48,19 +48,12 @@ ORDER BY count(p) DESC`,
     this.getSentriesPaths = (uid) => co(function*() {
         const session = that.db.session();
         try {
-           //const result = yield session.run({text:`MATCH (n { uid:{uid}} ) RETURN n.uid, n.created_on` ,
-           //    parameters: {uid: uid}});
 
 	   const result = yield session.run({text:
 			"MATCH p=allShortestPaths((n {uid : {uid}}) -[*]-> (sentry {sentry : 1}))\n\
 			RETURN sentry.uid,count(p),length(p),collect([ x in nodes(p)[1..-1] | x.uid])\n\
 			ORDER BY count(p) DESC",
                parameters: {uid: uid}});
-
-		// MATCH p=allShortestPaths((n {uid : "inso"}) -[*]-> (sentry {sentry : 1}))
-		// RETURN sentry.uid,count(p),length(p),collect([ x in nodes(p)[1..-1] | x.uid])
-		// ORDER BY length(p) DESC
-
 
 	    const sentriesPaths = [];
             for(const r of result.records) {
@@ -86,6 +79,53 @@ ORDER BY count(p) DESC`,
         }
         return []
     });
+
+    // API for percent of reachable sentries
+
+    this.getSentriesPathsLengths = (uid) => co(function*() {
+        const session = that.db.session();
+        try {
+
+            // Get stepmax
+            const stepMax = duniterServer.conf.stepMax;
+
+            // Calculte number of reachable sentries for each step
+            const result = yield session.run({text:
+                "WITH  {uid} as uid\n\
+                MATCH (n {sentry : 1} )\n\
+                WHERE NOT n.uid = uid\n\
+                WITH count(n) as count_n, uid\n\
+                UNWIND range(1,{stepMax}) as steps\n\
+                    MATCH p=ShortestPath((member {uid:uid}) <-[*]-(r_sentry {sentry : 1}))\n\
+                    WITH member, count_n, r_sentry, p, steps\n\
+                    WHERE length(p) = steps\n\
+                    RETURN member.uid,count_n as nb_sentries, steps, count(r_sentry) as reachable_sentries, 100.0 * count(r_sentry) / count_n AS percent",
+                parameters: {
+                    uid: uid,
+                    stepMax: stepMax}});
+
+
+            const sentriesPathsLengths = [];
+                for(const r of result.records) {
+        
+                    //console.log(r._fields);
+
+                    sentriesPathsLengths.add({
+                        'nb_steps': r._fields[2].getLowBits(),
+                        'nb_reachable_sentries': r._fields[3].getLowBits(),
+                        'percent': r._fields[4]
+                    })
+                }
+                return sentriesPathsLengths;
+        } catch (e) {
+            console.log(e);
+        } finally {
+            // Completed!
+            session.close();
+        }
+        return []
+    });
+
 
     this.refreshWoT = () => co(function*() {
         const session = that.db.session();
@@ -130,15 +170,6 @@ ORDER BY count(p) DESC`,
                 });
             }
             console.log("Done");
-
-	    // Mark sentries in Neo4j database
-	    // MATCH (i) --> (sentry)
-	    // WITH sentry, count(i) as count_i
-	    // WHERE count_i > 3
-	    // MATCH (sentry) --> (r)
-	    // WITH sentry, count(r) as count_r, count_i
-	    // WHERE count_r > 3
-	    // RETURN sentry.uid, count_r, count_i
 
             yield session.run({
                 text: "MATCH (i) --> (sentry)\n\
