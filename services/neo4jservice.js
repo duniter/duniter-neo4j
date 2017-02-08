@@ -16,6 +16,60 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
     const that = this;
     let db;
 
+
+    // Get Recommendations to enter the Wot when I know a single member
+    this.getSignersRecommendations = (uid,steps,uid2) => co(function*() {
+        const session = that.db.session();
+        try {
+
+	   // Get stepmax for sentries
+           const stepsMax = duniterServer.conf.stepMax;
+	   const sigStock = duniterServer.conf.sigStock;
+
+           const result = yield session.run({text:
+		"MATCH (a { uid:{uid}} ) -[*.."+ steps + "]- (b), (sentry {sentry:1})\n\
+		WHERE NOT a.nb_issued_sig = {sigStock} AND NOT b.nb_issued_sig = {sigStock} AND sentry <> a AND sentry <> b AND NOT b.uid = {uid2} AND NOT sentry.uid = {uid2}\n\
+		\n\
+		WITH  a, b, collect(DISTINCT sentry) as collect_sentry, count( DISTINCT sentry) as count_sentry\n\
+		UNWIND collect_sentry AS sentry\n\
+		OPTIONAL MATCH p1=ShortestPath((a) <-[*.." + stepsMax + " ]- (sentry {sentry:1})), \n\
+		p2=ShortestPath((b) <-[*.." + stepsMax + "]- (sentry {sentry:1}))\n\
+		OPTIONAL MATCH p3=ShortestPath((c {uid:{uid2}}) <-[*.." + stepsMax + "]- (sentry {sentry:1}))\n\
+		\n\
+		WITH a, b, c, p1, p2, p3, sentry, count_sentry, 3 as stepmax\n\
+		WHERE length(p1) < {stepsMax} OR length(p2) < {stepsMax} OR length(p3) < {stepsMax}\n\
+		\n\
+		WITH a.uid as a_uid, b.uid as b_uid, c.uid as c_uid, count(sentry) as reachable_sentries, count_sentry as total_sentries, 100.0 * count(sentry) / count_sentry as percent\n\
+		ORDER BY percent DESC\n\
+		LIMIT 10\n\
+		RETURN a_uid, c_uid, b_uid, percent",
+                parameters: {
+                    uid: uid,
+		    uid2: uid2,
+		    steps: steps,
+		    sigStock: sigStock,
+                    stepsMax: stepsMax}});
+
+            const SignersRecommendations = [];
+            for(const r of result.records) {
+                SignersRecommendations.add({
+                    'referring_member': r._fields[0],
+                    'optionnal_second_member': r._fields[1],
+		    'recommended_member': r._fields[2],
+		    'percent_sentries' : r._fields[3]
+                });
+            }
+            return SignersRecommendations;
+        } catch (e) {
+            console.log(e);
+        } finally {
+            // Completed!
+            session.close();
+        }
+        return []
+    });
+
+
     this.getShorteningPath = (uid) => co(function*() {
         const session = that.db.session();
         try {
@@ -209,6 +263,8 @@ ORDER BY count(p) DESC`,
             }
             console.log("Done");
 
+		// Pre-Compute Sentries
+
             yield session.run({
                 text: "MATCH (i) --> (sentry)\n\
 			WITH sentry, count(i) as count_i\n\
@@ -221,6 +277,17 @@ ORDER BY count(p) DESC`,
                         dSen: dSen
                  }
              });
+
+	   // Pre-Compute number of issued sigs for each member
+
+            yield session.run({
+                text: "MATCH (member)\n\
+			WITH member\n\
+			OPTIONAL MATCH (member) --> (i)\n\
+			WITH member, (CASE WHEN count(i) is Null THEN 0 ELSE count(i) END ) as count_i\n\
+			SET member.nb_issued_sig = count_i"
+             });
+
 
         } catch (e) {
             console.log(e);

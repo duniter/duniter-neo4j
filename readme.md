@@ -99,3 +99,49 @@ Exemple of Results :
     }
     ...
 
+
+### Recommendations of signers for a newcomer
+
+URI: /neo4j/recommendations/signers/:uid/:steps/:uid2
+
+Description : For a newcomer who knows only one member :uid, this API give potential signers at :steps of the known member wich will allow him to reach a maximum of sentries. If he knows a second member, he can also put it in parameters as :uid2
+
+Exemple :
+
+I know inso, and I want to know wich member at one step of inso who could sign me.
+
+/neo4j/recommendations/signers/inso/1/none
+
+	{
+		referring_member: "inso",
+		optionnal_second_member: null,
+		recommended_member: "JeanFerreira",
+		percent_sentries: 100
+	},
+	{
+		referring_member: "inso",
+		optionnal_second_member: null,
+		recommended_member: "urodelus",
+		percent_sentries: 100
+	},
+
+If I know two members, let's say vit and urodelus, I call :
+
+/neo4j/recommendations/signers/vit/1/urodelus
+
+	{
+		referring_member: "vit",
+		optionnal_second_member: "urodelus",
+		recommended_member: "Galuel",
+		percent_sentries: 100
+	},
+	{
+		referring_member: "vit",
+		optionnal_second_member: "urodelus",
+		recommended_member: "moul",
+		percent_sentries: 100
+	}
+
+
+
+
