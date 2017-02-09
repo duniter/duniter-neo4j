@@ -36,6 +36,10 @@ const stack = duniter.statics.autoStack([{
 
         onDatabaseExecute: (server, conf, program, params, startServices) => co(function*() {
 
+	// Duniter-Neo4j UI parameters
+          const SERVER_HOST = params[0] || DEFAULT_HOST;
+          const SERVER_PORT = parseInt(params[1]) || DEFAULT_PORT;
+
           // IMPORTANT: release Duniter services from "sleep" mode
           yield startServices();
 
