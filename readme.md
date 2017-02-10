@@ -60,12 +60,11 @@ Exemple of Result :
     }
 
 
-### Paths Lengths Mean
+### Average Paths Lengths to xpercent of sentries
 
 URI : /neo4j/sentries/pathslengthsmean/[uid]
 
-Description : Calculate the mean length path to reach a sentry (all sentries are used. TODO : calculate the mean length path for xpercent of sentries)
-
+Description : Calculate the mean length path to reach xpercent of sentries. 
 Exemple Result :
 
     {
