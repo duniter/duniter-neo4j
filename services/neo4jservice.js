@@ -74,9 +74,9 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
         const session = that.db.session();
         try {
            const result = yield session.run({text:`MATCH p=( (n { uid:{uid}} ) <-[*2]- (f2f) )
-WHERE NOT (n) --> (f2f) AND n <> f2f
-RETURN f2f.uid, count(p), collect([ x in nodes(p)[1..-1] | x.uid])
-ORDER BY count(p) DESC`,
+		WHERE NOT (n) --> (f2f) AND n <> f2f
+		RETURN f2f.uid, count(p), collect([ x in nodes(p)[1..-1] | x.uid])
+		ORDER BY count(p) DESC`,
                parameters: {uid: uid}});
             const shorteningPaths = [];
             for(const r of result.records) {
@@ -135,32 +135,48 @@ ORDER BY count(p) DESC`,
     });
 
 
-    // API to know mean path length to sentries
+    // API to know average path length to xpercent sentries
     this.getSentriesPathsLengthsMean = (uid) => co(function*() {
     const session = that.db.session();
     try {
-            // Calculte number of reachable sentries for each step
-            const result = yield session.run({text:
-                "WITH  {uid} as uid\n\
-                MATCH (n {sentry : 1} )\n\
-                WHERE NOT n.uid = uid\n\
-                WITH count(n) as count_n, uid\n\
-                MATCH p=ShortestPath((member {uid:uid}) <-[*]-(r_sentry {sentry : 1}))\n\
-                RETURN uid, 1.0 * SUM(length(p)) / count(p)",
+
+	    const xpercent = duniterServer.conf.xpercent
+
+	    // Calculate the xpercent number of sentries
+	    var result = yield session.run({text:
+                "MATCH (n {sentry : 1} )\n\
+                WHERE NOT n.uid = {uid}\n\
+                RETURN ceil({xpercent} * count(n))",
+            parameters: {
+                uid: uid,
+		xpercent: xpercent
+            }});
+
+	    const nbxpercentSentries = result.records[0]._fields[0]
+
+	    // calculate the average path length to reach xpercent sentries
+	    result = yield session.run({text:
+	    "MATCH (sentry {sentry : 1} )\n\
+	     WHERE NOT sentry.uid = {uid}\n\
+	     MATCH p=ShortestPath((member {uid:{uid}}) <-[*]-(sentry))\n\
+	     WITH p, member, sentry\n\
+	     ORDER BY length(p) LIMIT " + nbxpercentSentries + "\n\
+	    RETURN member.uid, 1.0 * SUM(length(p)) / " + nbxpercentSentries + "\n", //", SUM(length(p)), count(p)\n",
             parameters: {
                 uid: uid
             }});
 
+	   // console.log(result);
+
             const sentriesPathsLengthsMean = [];
 
-            for(const r of result.records) {
-        
-                //console.log(r._fields);
                 sentriesPathsLengthsMean.add({
-                'uid': r._fields[0],
-                'mean': r._fields[1]
+                'uid': result.records[0]._fields[0],
+                'mean': result.records[0]._fields[1]
+//		'sum': result.records[0]._fields[2],
+//		'count':result.records[0]._fields[3]
                  })
-            }
+
             return sentriesPathsLengthsMean;
 
         } catch (e) {
