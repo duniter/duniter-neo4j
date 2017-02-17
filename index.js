@@ -46,7 +46,7 @@ const stack = duniter.statics.autoStack([{
           // Main Loop
           yield main(server, SERVER_HOST, SERVER_PORT);
 
-          // Wait forever, Remuniter is a permanent program
+          // Wait forever, Duniter-Neo4j is a permanent program
           yield new Promise(() => null);
         })
       }]
@@ -60,6 +60,7 @@ co(function*() {
     process.argv.push('--mdb');
     process.argv.push(HOME_DUNITER_DATA_FOLDER);
   }
+  
   // Execute our program
   yield stack.executeStack(process.argv);
   // End

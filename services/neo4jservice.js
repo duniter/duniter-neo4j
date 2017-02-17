@@ -15,295 +15,209 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
 
     const that = this;
     let db;
+    var lastBlockNumber;
+    var lastBlockHash;
 
 
-    // Get Recommendations to enter the Wot when I know a single member
-    this.getSignersRecommendations = (uid,steps,uid2) => co(function*() {
+    // Import Data from blocks table
+    this.updateDB = () => co(function*() {
+
         const session = that.db.session();
         try {
 
-	   // Get stepmax for sentries
-           const stepsMax = duniterServer.conf.stepMax;
-	   const sigStock = duniterServer.conf.sigStock;
+            var nextBlockNumber = lastBlockNumber + 1;
+            const nextBlock = (yield duniterServer.dal.bindexDAL.query("SELECT number, previousHash\n\
+                                                                         FROM block\n\
+                                                                         WHERE fork = 0 AND number = " + nextBlockNumber ));
 
-           const result = yield session.run({text:
-		"MATCH (a { uid:{uid}} ) -[*.."+ steps + "]- (b), (sentry {sentry:1})\n\
-		WHERE NOT a.nb_issued_sig = {sigStock} AND NOT b.nb_issued_sig = {sigStock} AND sentry <> a AND sentry <> b AND NOT b.uid = {uid2} AND NOT sentry.uid = {uid2}\n\
-		\n\
-		WITH  a, b, collect(DISTINCT sentry) as collect_sentry, count( DISTINCT sentry) as count_sentry\n\
-		UNWIND collect_sentry AS sentry\n\
-		OPTIONAL MATCH p1=ShortestPath((a) <-[*.." + stepsMax + " ]- (sentry {sentry:1})), \n\
-		p2=ShortestPath((b) <-[*.." + stepsMax + "]- (sentry {sentry:1}))\n\
-		OPTIONAL MATCH p3=ShortestPath((c {uid:{uid2}}) <-[*.." + stepsMax + "]- (sentry {sentry:1}))\n\
-		\n\
-		WITH a, b, c, p1, p2, p3, sentry, count_sentry, 3 as stepmax\n\
-		WHERE length(p1) < {stepsMax} OR length(p2) < {stepsMax} OR length(p3) < {stepsMax}\n\
-		\n\
-		WITH a.uid as a_uid, b.uid as b_uid, c.uid as c_uid, count(sentry) as reachable_sentries, count_sentry as total_sentries, 100.0 * count(sentry) / count_sentry as percent\n\
-		ORDER BY percent DESC\n\
-		LIMIT 10\n\
-		RETURN a_uid, c_uid, b_uid, percent",
-                parameters: {
-                    uid: uid,
-		    uid2: uid2,
-		    steps: steps,
-		    sigStock: sigStock,
-                    stepsMax: stepsMax}});
+            console.log("Checking Fork. nextBlockpreviousHash : " + nextBlock['previousHash'] + " lastBlockHash : " + lastBlockHash);
 
-            const SignersRecommendations = [];
-            for(const r of result.records) {
-                SignersRecommendations.add({
-                    'referring_member': r._fields[0],
-                    'optionnal_second_member': r._fields[1],
-		    'recommended_member': r._fields[2],
-		    'percent_sentries' : r._fields[3]
-                });
-            }
-            return SignersRecommendations;
-        } catch (e) {
-            console.log(e);
-        } finally {
-            // Completed!
-            session.close();
-        }
-        return []
-    });
+            // In case of fork
+            if (nextBlock['previousHash'] != lastBlockHash) {
+
+                // Find fork point
+                var i = 2;
+                do {
+
+                    const lastBlock = yield session.run("MATCH (n:Root) <-[:NEXT*" + i + "]- (b:Block) RETURN b.number, b.hash");
+                    lastBlockNumber = lastBlock.records[0]._fields[0];
+                    lastBlockHash = lastBlock.records[0]._fields[1];
+
+                    nextBlockNumber = lastBlockNumber + 1;
+                    nextBlock = (yield duniterServer.dal.bindexDAL.query("SELECT number, previousHash\n\
+                                                                         FROM block\n\
+                                                                         WHERE fork = 0 AND number = " + nextBlockNumber ));  
+                    i ++;
+
+                } while (nextBlock['previousHash'] != lastBlockHash)
 
 
-    this.getShorteningPath = (uid) => co(function*() {
-        const session = that.db.session();
-        try {
-           const result = yield session.run({text:`MATCH p=( (n { uid:{uid}} ) <-[*2]- (f2f) )
-		WHERE NOT (n) --> (f2f) AND n <> f2f
-		RETURN f2f.uid, count(p), collect([ x in nodes(p)[1..-1] | x.uid])
-		ORDER BY count(p) DESC`,
-               parameters: {uid: uid}});
-            const shorteningPaths = [];
-            for(const r of result.records) {
-                const certifiers = [];
-                for (const cert of r._fields[2]) {
-                    certifiers.add(cert[0]);
-                }
-                shorteningPaths.add({
-                    'f2f': r._fields[0],
-                    'certifiers': certifiers,
-                });
-            }
-            return shorteningPaths;
-        } catch (e) {
-            console.log(e);
-        } finally {
-            // Completed!
-            session.close();
-        }
-        return []
-    });
+                // Destroy all data after fork
+                /* MATCH p=( (root:Root) <-[:NEXT*1..]- (b:Block {number:0}) )
+                    WITH nodes(p) as blocks
+                    UNWIND blocks as block
+                        OPTIONAL MATCH (block) <-[i]- (:Idty)
+                        DELETE i
+                        WITH block
+                        OPTIONAL MATCH (block) <-- (cert:Certificate)
+                        DETACH DELETE cert
+                */
 
-    this.getSentriesPaths = (uid) => co(function*() {
-        const session = that.db.session();
-        try {
-
-	   const result = yield session.run({text:
-			"MATCH p=allShortestPaths((n {uid : {uid}}) <-[*]- (sentry {sentry : 1}))\n\
-			RETURN sentry.uid,count(p),length(p),collect([ x in nodes(p)[1..-1] | x.uid])\n\
-			ORDER BY count(p) DESC",
-               parameters: {uid: uid}});
-
-	    const sentriesPaths = [];
-            for(const r of result.records) {
-
-                const paths = [];
-                for (const path of r._fields[3]) {
-                    paths.add(path[0]);
-                }
-		
-                sentriesPaths.add({
-                    'sentry': r._fields[0],
-		    'count': r._fields[1].getLowBits(),
-                    'length': r._fields[2].getLowBits(),
-		    'paths': r._fields[3]
-                })
-            }
-            return sentriesPaths;
-        } catch (e) {
-            console.log(e);
-        } finally {
-            // Completed!
-            session.close();
-        }
-        return []
-    });
-
-
-    // API to know average path length to xpercent sentries
-    this.getSentriesPathsLengthsMean = (uid) => co(function*() {
-    const session = that.db.session();
-    try {
-
-	    const xpercent = duniterServer.conf.xpercent
-
-	    // Calculate the xpercent number of sentries
-	    var result = yield session.run({text:
-                "MATCH (n {sentry : 1} )\n\
-                WHERE NOT n.uid = {uid}\n\
-                RETURN ceil({xpercent} * count(n))",
-            parameters: {
-                uid: uid,
-		xpercent: xpercent
-            }});
-
-	    const nbxpercentSentries = result.records[0]._fields[0]
-
-	    // calculate the average path length to reach xpercent sentries
-	    result = yield session.run({text:
-	    "MATCH (sentry {sentry : 1} )\n\
-	     WHERE NOT sentry.uid = {uid}\n\
-	     MATCH p=ShortestPath((member {uid:{uid}}) <-[*]-(sentry))\n\
-	     WITH p, member, sentry\n\
-	     ORDER BY length(p) LIMIT " + nbxpercentSentries + "\n\
-	    RETURN member.uid, 1.0 * SUM(length(p)) / " + nbxpercentSentries + "\n", //", SUM(length(p)), count(p)\n",
-            parameters: {
-                uid: uid
-            }});
-
-	   // console.log(result);
-
-            const sentriesPathsLengthsMean = [];
-
-                sentriesPathsLengthsMean.add({
-                'uid': result.records[0]._fields[0],
-                'mean': result.records[0]._fields[1]
-//		'sum': result.records[0]._fields[2],
-//		'count':result.records[0]._fields[3]
-                 })
-
-            return sentriesPathsLengthsMean;
-
-        } catch (e) {
-            console.log(e);
-        } finally {
-            // Completed!
-            session.close();
-        }
-        return []
-    });
-
-    // API for percent of reachable sentries
-
-    this.getSentriesPathsLengths = (uid) => co(function*() {
-        const session = that.db.session();
-        try {
-
-            // Get stepmax
-            const stepMax = duniterServer.conf.stepMax;
-
-            // Calculte number of reachable sentries for each step
-            const result = yield session.run({text:
-                "WITH  {uid} as uid\n\
-                MATCH (n {sentry : 1} )\n\
-                WHERE NOT n.uid = uid\n\
-                WITH count(n) as count_n, uid\n\
-                UNWIND range(1,{stepMax}) as steps\n\
-                    MATCH p=ShortestPath((member {uid:uid}) <-[*]-(r_sentry {sentry : 1}))\n\
-                    WITH member, count_n, r_sentry, p, steps\n\
-                    WHERE length(p) = steps\n\
-                    RETURN member.uid,count_n as nb_sentries, steps, count(r_sentry) as reachable_sentries, 100.0 * count(r_sentry) / count_n AS percent",
-                parameters: {
-                    uid: uid,
-                    stepMax: stepMax}});
-
-
-            const sentriesPathsLengths = [];
-                for(const r of result.records) {
-        
-                    //console.log(r._fields);
-
-                    sentriesPathsLengths.add({
-                        'nb_steps': r._fields[2].getLowBits(),
-                        'nb_reachable_sentries': r._fields[3].getLowBits(),
-                        'percent': r._fields[4]
-                    })
-                }
-                return sentriesPathsLengths;
-        } catch (e) {
-            console.log(e);
-        } finally {
-            // Completed!
-            session.close();
-        }
-        return []
-    });
-
-
-    this.refreshWoT = () => co(function*() {
-        const session = that.db.session();
-        try {
-            yield session.run("MATCH (n) DETACH\nDELETE n");
-            console.log("Select identities");
-            const identities = yield duniterServer.dal.idtyDAL.query('SELECT `pub`, `uid`,`member`,`created_on`,`written_on` FROM i_index;');
-            console.log(identities);
-
-	    // Get members count
-	    const head = yield duniterServer.dal.getCurrentBlockOrNull();
-	    const membersCount = head ? head.membersCount : 0;
-
-	    // Calculate cert number required to become sentry
-	    let dSen;
-	    dSen = Math.ceil(Math.pow(membersCount, 1 / duniterServer.conf.stepMax));
-
-            for(const idty in identities) {
-                yield session.run({
-                    text: "CREATE (n:Idty { pubkey: {pubkey}, uid: {uid}, member: {member}, created_on: {created_on}, written_on: {written_on}, sentry: {sentry} })",
-                    parameters: {
-                        pubkey: identities[idty].pub,
-                        uid: identities[idty].uid,
-                        member: identities[idty].member,
-			created_on: identities[idty].created_on.split("-",1),
-			written_on: identities[idty].written_on.split("-",1),
-			sentry: "0"
-                    }
-                });
-           }
-            const certs = yield duniterServer.dal.certDAL.query('SELECT `issuer`,`receiver`,`created_on`,`written_on` FROM c_index;');
-            console.log(certs);
-            for(const c in certs) {
-                yield session.run({text:"MATCH (u:Idty { pubkey:{issuer} }), (r:Idty { pubkey:{receiver} })\n\
-    				CREATE (u)-[c:CERTIFY { created_on: {created_on}, written_on: {written_on} } ]->(r)",
-                        parameters:{
-                            issuer: certs[c].issuer,
-                            receiver: certs[c].receiver,
-			    created_on: certs[c].created_on.split("-",1),
-			    written_on: certs[c].written_on.split("-",1)
+                yield tx.run({
+                    text: "MATCH p=( (n:Root) <-[:NEXT*1..]- (b:Block {number:{number}}) )\n\
+                           WITH collect(nodes(p)[1..-1]) as collect_blocks\n\
+                           UNWIND collec_blocks as block\n\
+                           OPTIONAL MATCH (block) -[c]-> (node)",
+                        parameters: {
+                            number: lastBlockNumber
                         }
                 });
+
             }
-            console.log("Done");
 
-		// Pre-Compute Sentries
+            // Check how many blocks have to be imported
+            //const max = (yield duniterServer.dal.bindexDAL.query('SELECT MAX(number) FROM block'))[0];
+            const max = 10;
 
-            yield session.run({
-                text: "MATCH (i) --> (sentry)\n\
-			WITH sentry, count(i) as count_i\n\
-			WHERE count_i >= {dSen}\n\
-			MATCH (sentry) --> (r)\n\
-			WITH sentry, count(r) as count_r, count_i\n\
-			WHERE count_r >= {dSen}\n\
-			SET sentry.sentry = 1",
-                    parameters: {
-                        dSen: dSen
-                 }
-             });
+            // Read blocks to import
+            const blocks = (yield duniterServer.dal.bindexDAL.query("SELECT number, hash, previousHash, time, joiners, excluded, certifications\n\
+                                                                                FROM block\n\
+                                                                                WHERE fork = 0 AND number > " + lastBlockNumber + " AND number <= " + max + "\n\
+                                                                                ORDER BY number"));
 
-	   // Pre-Compute number of issued sigs for each member
 
-            yield session.run({
-                text: "MATCH (member)\n\
-			WITH member\n\
-			OPTIONAL MATCH (member) --> (i)\n\
-			WITH member, (CASE WHEN count(i) is Null THEN 0 ELSE count(i) END ) as count_i\n\
-			SET member.nb_issued_sig = count_i"
-             });
+            // for each block, update Neo4j
+            // Note : Using transactions to speed up node creations (10 times faster)
 
+            var tx = session.beginTransaction();
+            //for(var block_number = 1; block_number <= max['MAX(number)']; block_number ++) {
+            for(var i = 0; i < blocks.length; i ++) {
+                    
+                    yield tx.run({
+                    text: "CREATE (block:Block {number:{number}, hash:{hash}, previousHash:{previousHash}, time:{time}})\n\
+                    WITH block\n\
+                    MATCH (previousblock {number:{previousBlockNumber}})\n\
+                    CREATE (previousblock) -[:NEXT]-> (block)",
+                        parameters: {
+                            number: blocks[i]['number'],
+                            time: blocks[i]['time'],
+                            hash: blocks[i]['hash'],
+                            previousHash: blocks[i]['previousHash'],
+                            previousBlockNumber: blocks[i]['number'] - 1
+                        }
+                    });
+
+                    // Create join identities
+                    const joiners = JSON.parse(blocks[i]['joiners'])
+
+                    for(const joiner of joiners) {
+
+                        yield tx.run({
+                        text: "MERGE (identity:Idty {pubkey:{pubkey}, uid:{uid}})\n\
+                        WITH identity\n\
+                        MATCH (block {number:{number}})\n\
+                        CREATE (identity) -[:JOIN]-> (block)",
+                            parameters: {
+                                number: blocks[i]['number'],
+                                uid: joiner.split(":")[4],
+                                pubkey: joiner.split(":")[0]
+                            }
+                        });  
+                    }
+
+                    // Create excluded identities
+                    const excluded = JSON.parse(blocks[i]['excluded'])
+
+                    for(const member of excluded) {
+
+                        yield tx.run({
+                        text: "MATCH (identity:Idty {pubkey:{pubkey}), (block {number:{number}})\n\
+                        CREATE (identity) -[:EXCLUDED]-> (block)",
+                            parameters: {
+                                number: blocks[i]['number'],
+                                pubkey: member
+                            }
+                        });  
+                    }
+
+                    // Create certifications
+                    const certifications = JSON.parse(blocks[i]['certifications'])
+
+                    for(const certificate of certifications) {
+
+                        yield tx.run({
+                        text: "MATCH (idty_from:Idty {pubkey:{pubkey_from}}), (idty_to:Idty {pubkey:{pubkey_to}}), (block {number:{number}})\n\
+                        CREATE (c:Certificate) -[:WRITTEN]-> (block)\n\
+                        CREATE (idty_from) <-[:FROM]- (c) -[:TO]-> (idty_to)",
+                            parameters: {
+                                number: blocks[i]['number'],
+                                pubkey_from: certificate.split(":")[0],
+                                pubkey_to: certificate.split(":")[1]
+                            }
+                        }); 
+
+                    }
+
+
+                    // Update the timeline
+                    var blockTime = new Date(blocks[i]['time'] * 1000);
+                    var blockYear = String(blockTime.getUTCFullYear());
+                    var blockMonth = String(blockTime.getUTCMonth()) + 1;
+                    var blockDay = String(blockTime.getUTCDate());
+                    var blockHour = String(blockTime.getUTCHours());
+                    
+                    yield tx.run({
+                    text: "MATCH (timeline:Timeline),(block:Block {number:{number}})\n\
+                    MERGE (year:Year {year:{blockYear}})\n\
+                    MERGE (month:Month {month:{blockMonth}})\n\
+                    MERGE (day:Day {day:{blockDay}})\n\
+                    MERGE (hour:Hour {hour:{blockHour}})\n\
+                    MERGE (timeline) -[:CONTAINS]-> (year)\n\
+                    MERGE (year)-[:CONTAINS]-> (month)\n\
+                    MERGE (month)-[:CONTAINS]-> (day) \n\
+                    MERGE (day)-[:CONTAINS]-> (hour) \n\
+                    MERGE (block) -[:HAPPENED_ON]-> (hour)\n\
+                    WITH timeline,year,month,day,hour\n\
+                    MATCH (day) --> (previousHour) WHERE NOT (previousHour) --> () AND previousHour <> hour\n\
+                    CREATE (previousHour) -[:NEXT]-> (hour)\n\
+                    WITH timeline,year,month,day\n\
+                    MATCH (month) --> (previousDay) WHERE NOT (previousDay) --> () AND previousDay <> day\n\
+                    CREATE (previousDay) -[:NEXT]-> (day)\n\
+                    WITH timeline,year,month\n\
+                    MATCH (year) --> (previousMonth) WHERE NOT (previousMonth) --> () AND previousMonth <> month\n\
+                    CREATE (previousMonth) -[:NEXT]-> (month)\n\
+                    WITH timeline,year\n\
+                    MATCH (timeline) --> (previousYear) WHERE NOT (previousYear) --> () AND previousYear <> year\n\
+                    CREATE (previousYear) -[:NEXT]-> (year)",
+                        parameters: {
+                            number: blocks[i]['number'],
+                            blockYear: blockYear,
+                            blockMonth: blockMonth,
+                            blockDay: blockDay,
+                            blockHour: blockHour
+                        }
+                    });
+
+
+
+                }
+
+            // Update the root node link to the last block
+            yield tx.run({text:"MATCH (root:Root)\n\
+                                OPTIONAL MATCH (root) <-[next:NEXT]- ()\n\
+                                DELETE next\n\
+                                WITH root\n\
+                                MATCH (block {number:{lastBlockNumber}})\n\
+                                CREATE (root) <-[:NEXT]- (block)",
+                                parameters: {
+                                    lastBlockNumber: blocks[blocks.length - 1]['number']
+                                }
+                            });
+
+            tx.commit();
+        
+
+           
 
         } catch (e) {
             console.log(e);
@@ -311,34 +225,53 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
             // Completed!
             session.close();
         }
-
+        return []
     });
 
-    this.init = () => co(function*() {
+
+    this.betainit = () => co(function*() {
+
         try {
             that.db = neo4j.driver("bolt://" + neo4jHost,
                 neo4j.auth.basic(duniterServer.conf.neo4j.user, duniterServer.conf.neo4j.password));
 
-            yield that.refreshWoT();
+            const session = that.db.session();
+            try {
+                
+                // Delete all nodes (it's for testing)
+                yield session.run("MATCH (n) DETACH\nDELETE n");
+
+                // Create root nodes and first block if does not exist
+                yield session.run("MERGE (n:Root)");
+                yield session.run("MERGE (n:Timeline)");
+
+                // Initialize object variables
+                const lastBlock = yield session.run("MATCH (n:Root) <-[:NEXT*1]- (b:Block) RETURN b.number, b.hash");
+
+                // If it's the first run, there's no block
+                if (!lastBlock.records[0]) {
+                    lastBlockNumber = -1;
+                    lastBlockHash = "";
+                } else {
+                    lastBlockNumber = lastBlock.records[0]._fields[0];
+                    lastBlockHash = lastBlock.records[0]._fields[1];
+                }
+
+
+            } catch (e) {
+                console.log(e);
+            } finally {
+                // Completed!
+                session.close();
+            }
+
+            yield that.updateDB();
             that.db.onError = (error) => {
                 console.log(error);
             };
-            duniterServer
-                .pipe(es.mapSync((data) => co(function*(){
-                    try {
-                        // Broadcast block
-                        if (data.joiners) {
-                            yield that.refreshWoT();
-                        }
-                    } catch (e) {
-                        console.log(e);
-                    }
-                }))
-                );
-
         } catch (e) {
             console.log(e);
         }
+    });     
 
-    });
 }
