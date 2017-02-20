@@ -264,7 +264,7 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
 
                 //yield that.refreshWot();
 
-                that.refreshWot();
+                yield that.refreshWot();
                 setInterval(that.refreshWot, 3 * 60 * 1000);
                 
 
