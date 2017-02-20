@@ -25,15 +25,17 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
         const session = that.db.session();
         try {
 
+                console.log("Running refreshWot");
+
                 // Delete all nodes (it's for testing)
-                yield session.run("MATCH (n) DETACH\nDELETE n");
+                //yield session.run("MATCH (n) DETACH\nDELETE n");
 
                 // Initialize object variables
                 const lastBlock = yield session.run("MATCH (n:Root) <-[:NEXT*1]- (b:Block) RETURN b.number as number, b.hash as hash");
 
                 // Check the last block number in the database
-                //const max = (yield duniterServer.dal.bindexDAL.query('SELECT MAX(number) FROM block WHERE fork = 0'))[0]['MAX(number)'];
-                const max = 1000;
+                const max = (yield duniterServer.dal.bindexDAL.query('SELECT MAX(number) FROM block WHERE fork = 0'))[0]['MAX(number)'];
+                //const max = 1000;
 
                 if (!lastBlock.records[0]) {
                     // If it's the first run, there's no block
@@ -260,7 +262,11 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                 that.db = neo4j.driver("bolt://" + neo4jHost,
                 neo4j.auth.basic(duniterServer.conf.neo4j.user, duniterServer.conf.neo4j.password));
 
-                yield that.refreshWot();
+                //yield that.refreshWot();
+
+                that.refreshWot();
+                setInterval(that.refreshWot, 3 * 60 * 1000);
+                
 
                 that.db.onError = (error) => {
                     console.log(error);
