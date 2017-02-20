@@ -26,11 +26,15 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
         try {
 
                 // Delete all nodes (it's for testing)
-                //yield session.run("MATCH (n) DETACH\nDELETE n");
+                yield session.run("MATCH (n) DETACH\nDELETE n");
 
                 // Initialize object variables
                 const lastBlock = yield session.run("MATCH (n:Root) <-[:NEXT*1]- (b:Block) RETURN b.number as number, b.hash as hash");
-                
+
+                // Check the last block number in the database
+                //const max = (yield duniterServer.dal.bindexDAL.query('SELECT MAX(number) FROM block WHERE fork = 0'))[0]['MAX(number)'];
+                const max = 1000;
+
                 if (!lastBlock.records[0]) {
                     // If it's the first run, there's no block
 
@@ -42,8 +46,8 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                     
                     lastBlockNumber = -1;
                     lastBlockHash = "";
-
-                } else {
+ 
+                } else if ( lastBlock.records[0]._fields[0] < max ) {
 
                         lastBlockNumber = lastBlock.records[0]._fields[0];
                         lastBlockHash = lastBlock.records[0]._fields[1];
@@ -98,17 +102,16 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                     } 
 
                 }
-            // Check how many blocks have to be imported
-            const max = (yield duniterServer.dal.bindexDAL.query('SELECT MAX(number) FROM block WHERE fork = 0'))[0]['MAX(number)'];
+                else {
+                    return []
+                }
+
 
             // Read blocks to import
             const blocks = (yield duniterServer.dal.bindexDAL.query("SELECT number, hash, previousHash, time, joiners, excluded, certifications\n\
                                                                                 FROM block\n\
                                                                                 WHERE fork = 0 AND number > " + lastBlockNumber + " AND number <= " + max + "\n\
                                                                                 ORDER BY number"));
-
-            // Check there is at least one block to import
-            if (blocks[0]) {
             
                 // for each block, update Neo4j
                 // Note : Using transactions to speed up node creations (10 times faster)
@@ -190,30 +193,28 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                         var blockMonth = String(blockTime.getUTCMonth()) + 1;
                         var blockDay = String(blockTime.getUTCDate());
                         var blockHour = String(blockTime.getUTCHours());
-                        
+
+
                         yield tx.run({
-                        text: "MATCH (timeline:Timeline),(block:Block {number:{number}})\n\
-                        MERGE (year:Year {year:{blockYear}})\n\
-                        MERGE (month:Month {month:{blockMonth}})\n\
-                        MERGE (day:Day {day:{blockDay}})\n\
-                        MERGE (hour:Hour {hour:{blockHour}})\n\
-                        MERGE (timeline) -[:CONTAINS]-> (year)\n\
-                        MERGE (year)-[:CONTAINS]-> (month)\n\
-                        MERGE (month)-[:CONTAINS]-> (day) \n\
-                        MERGE (day)-[:CONTAINS]-> (hour) \n\
-                        MERGE (block) -[:HAPPENED_ON]-> (hour)\n\
-                        WITH timeline,year,month,day,hour\n\
-                        MATCH (day) --> (previousHour) WHERE NOT (previousHour) --> () AND previousHour <> hour\n\
-                        CREATE (previousHour) -[:NEXT]-> (hour)\n\
-                        WITH timeline,year,month,day\n\
-                        MATCH (month) --> (previousDay) WHERE NOT (previousDay) --> () AND previousDay <> day\n\
-                        CREATE (previousDay) -[:NEXT]-> (day)\n\
-                        WITH timeline,year,month\n\
-                        MATCH (year) --> (previousMonth) WHERE NOT (previousMonth) --> () AND previousMonth <> month\n\
-                        CREATE (previousMonth) -[:NEXT]-> (month)\n\
-                        WITH timeline,year\n\
-                        MATCH (timeline) --> (previousYear) WHERE NOT (previousYear) --> () AND previousYear <> year\n\
-                        CREATE (previousYear) -[:NEXT]-> (year)",
+                        text: "MATCH (t:Timeline),(block:Block {number:{number}})\n\
+                        MERGE (t) -[y:CONTAINS {year:{blockYear}}]-> (yf:Year) \n\
+                        MERGE (yf) -[m:CONTAINS {month:{blockMonth}}]-> (mf:Month)\n\
+                        MERGE (mf) -[d:CONTAINS {day:{blockDay}}]-> (df:Day)\n\
+                        MERGE (df) -[h:CONTAINS {hour:{blockHour}}]-> (hf:Hour)\n\
+                        MERGE (block) -[:HAPPENED_ON]-> (hf)\n\
+                        WITH yf,mf,df,hf\n\
+                        OPTIONAL MATCH (previousHour:Hour)\n\
+                        WHERE NOT (previousHour) -[:NEXT]-> () AND previousHour <> hf\n\
+                        OPTIONAL MATCH (previousDay:Day)\n\
+                        WHERE NOT (previousDay) -[:NEXT]-> () AND previousDay <> df\n\
+                        OPTIONAL MATCH (previousMonth:Month)\n\
+                        WHERE NOT (previousMonth) -[:NEXT]-> () AND previousMonth <> mf\n\
+                        OPTIONAL MATCH (previousYear:Year)\n\
+                        WHERE NOT (previousYear) -[:NEXT]-> () AND previousYear <> yf\n\
+                        FOREACH (n in case when previousHour is Null then [] else [previousHour] end | MERGE (previousHour) -[:NEXT]-> (hf) )\n\
+                        FOREACH (n in case when previousDay is Null then [] else [previousDay] end | MERGE (previousDay) -[:NEXT]-> (df) )\n\
+                        FOREACH (n in case when previousMonth is Null then [] else [previousMonth] end | MERGE (previousMonth) -[:NEXT]-> (mf) )\n\
+                        FOREACH (n in case when previousYear is Null then [] else [previousYear] end | MERGE (n) -[:NEXT]-> (yf) )",
                             parameters: {
                                 number: blocks[i]['number'],
                                 blockYear: blockYear,
@@ -241,7 +242,7 @@ function Neo4jService(duniterServer, neo4jHost, neo4jPort) {
                                 });
             
                 tx.commit();
-            }
+            
 
         } catch (e) {
             console.log(e);
